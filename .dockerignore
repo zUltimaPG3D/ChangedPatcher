@@ -1,0 +1,15 @@
+# Patches
+patches/*
+!patches/.gitkeep
+
+# Game
+*.rgss2a*
+mkxp.zip
+
+# Build process
+build
+configure
+_autogen_*.v
+
+# Ruby
+.ruby-version

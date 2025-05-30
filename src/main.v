@@ -1,27 +1,26 @@
 module main
 
 import os
-import ruby
+import vruby
 import compress.szip
 import term
 import toml
 import net.http
-
 import vrgss
 
 struct Patch {
 	path string
 pub mut:
-	valid bool
+	valid             bool
 	already_installed bool
 
-	cfg toml.Doc
-	name string
-	id string
+	cfg        toml.Doc
+	name       string
+	id         string
 	patch_type string
 
-	original_allowed bool
-	special_allowed bool
+	original_allowed   bool
+	special_allowed    bool
 	unofficial_allowed bool
 
 	use_mkxp bool
@@ -39,11 +38,11 @@ fn main() {
 		println('usage: ChangedPatcher [-h|--help] [--keep-temp] [--dry-run] [--force-scripts] [--dont-save-patchlist] [-d|--dir PATH]')
 		println('')
 		println('  -h --help             | Prints this message and exits')
-		println('  --keep-temp           | Keeps the temporary RVDATA files that the program creates to read the data from them')
-		println('  --dry-run             | Doesn\'t actually write to the game archive')
-		println('  --force-scripts       | Forces script processing as if an installed patch/library edits scripts even if it doesn\'t')
-		println('  --dont-save-patchlist | Doesn\'t save the patchlist to the game archive, so you can install multiple patches at once')
-		println('  -d --dir              | Sets the working directory to the given PATH, defaults to the current execution directory.')
+		println("  --dry-run             | Doesn't actually write to the game archive")
+		println("  --force-scripts       | Forces script processing as if an installed patch/library edits scripts even if it doesn't")
+		println("  --dont-save-patchlist | Doesn't save the patchlist to the game archive, so you can install multiple patches at once")
+		println('  -d --dir              | Sets the working directory to the given PATH, defaults to the current execution directory')
+		println('  -v --verbose          | Logs more processing steps and internal information')
 		println('')
 		println('example: ChangedPatcher -d "~/.steam/steam/steamapps/common/Changed/"')
 		exit(0)
@@ -53,38 +52,54 @@ fn main() {
 
 	if !wd_exists {
 		println(args.working_directory)
-		eprintln(term.bg_red(' The working directory argument you passed doesn\'t exist! '))
+		eprintln(term.bg_red(" The working directory argument you passed doesn't exist! "))
 		exit(1)
 	}
 
 	println('Initializing Ruby...')
-	ruby.init()
+	vruby.initialize()
+	vruby.require('zlib')
 	define_rpg_types()
 
-	mut state := &State{};
-
+	mut state := &State{}
 	mut patches := []Patch{}
 
-	term.clear_previous_line()
+	if !args.verbose {
+		term.clear_previous_line()
+	}
 
 	// Initialize RGSSAD archive
 
 	archive_path := os.join_path(args.working_directory, 'Game.rgss2a')
+
+	if args.verbose {
+		println('Searching for Game.rgss2a at path: ${archive_path}')
+	}
+
 	archive_exists := os.exists(archive_path)
 
 	if !archive_exists {
-		eprintln('No ${term.bg_red(" Game.rgss2a ")} file found in the current working directory!')
+		eprintln('No ${term.bg_red(' Game.rgss2a ')} file found in the current working directory!')
 		exit(0)
 	}
 
 	println(term.bg_green(' Game.rgss2a found! '))
 
 	mut archive := vrgss.RGSS2A{}
+
+	if args.verbose {
+		println('Initializing RGSS2A archive...')
+	}
+
 	archive.initialize(archive_path)
 
 	if !archive.valid() {
-		eprintln('The archive file ${term.bg_red(" Game.rgss2a ")} is invalid!')
+		eprintln('The archive file ${term.bg_red(' Game.rgss2a ')} is invalid!')
 		exit(1)
+	}
+
+	if args.verbose {
+		println('Parsing RGSS2A archive...')
 	}
 
 	archive.parse()
@@ -93,26 +108,23 @@ fn main() {
 
 	println('Determining game title...')
 
-	system_entry := archive.get_entry('Data/System.rvdata') or { 
-		eprintln('The archive file has no ${term.bg_red(" Data/System.rvdata ")} file!')
+	system_entry := archive.get_entry('Data/System.rvdata') or {
+		eprintln('The archive file has no ${term.bg_red(' Data/System.rvdata ')} file!')
 		exit(1)
+	}
+
+	if args.verbose {
+		println('Reading System.rvdata')
 	}
 
 	entry := archive.read_entry(system_entry)
-	os.write_file_array('./temp_system.rvdata', entry) or { 
-		eprintln('Failed to write to the temporary System.rvdata file!')
-		exit(1)
+	game_title := get_game_title(entry, args.verbose)
+
+	if !args.verbose {
+		term.clear_previous_line()
 	}
-
-	game_title := get_game_title()
-
-	term.clear_previous_line()
 
 	println('Game name: ${term.highlight_command(game_title)}')
-
-	if !args.keep_temp {
-		os.rm('./temp_system.rvdata') or { }
-	}
 
 	// Check for Data/patchlist.txt
 
@@ -122,20 +134,26 @@ fn main() {
 	mut installed_patches := []string{}
 	mut patchlist_content := ''
 
+	if args.verbose {
+		println('Checking for Data/patchlist.txt')
+	}
+
 	patchlist_entry := archive.get_entry('Data/patchlist.txt') or {
 		has_patchlist = false
 		vrgss.Entry{}
 	}
 
-	term.clear_previous_line()
+	if !args.verbose {
+		term.clear_previous_line()
+	}
 
 	if has_patchlist {
 		patchlist_content = archive.read_entry(patchlist_entry).bytestr()
 		installed_patches = patchlist_content.split('\n')
 
-		println('Status: ${term.bg_green(" Patched ")}')
+		println('Status: ${term.bg_green(' Patched ')}')
 	} else {
-		println('Status: ${term.bg_green(" Unpatched ")}')
+		println('Status: ${term.bg_green(' Unpatched ')}')
 	}
 
 	// Load all local patches
@@ -144,7 +162,7 @@ fn main() {
 
 	paths := os.ls('./patches') or { [] }
 	if paths.len == 0 {
-		eprintln('No patches found inside the ${term.bg_red(" patches ")} folder!')
+		eprintln('No patches found inside the ${term.bg_red(' patches ')} folder!')
 		exit(0)
 	}
 
@@ -152,10 +170,20 @@ fn main() {
 		p := os.join_path('./patches', path)
 
 		if !os.is_file(p) {
-			patches << Patch{path: p}
+			if args.verbose {
+				println('Adding patch at ${p} to potential patch list')
+			}
+
+			patches << Patch{
+				path: p
+			}
 			continue
 		} else {
 			if os.file_ext(path) == '.zip' {
+				if args.verbose {
+					println('Found .zip file: extracting ${p}')
+				}
+
 				xp := p.all_before_last(os.file_ext(path))
 
 				os.mkdir(xp) or {
@@ -174,17 +202,19 @@ fn main() {
 					continue
 				}
 
-				os.rename(p, os.join_path('./patches', '${path}.done')) or {
-					continue
-				}
+				os.rename(p, os.join_path('./patches', '${path}.done')) or { continue }
 
-				patches << Patch{path: xp}
+				patches << Patch{
+					path: xp
+				}
 				continue
 			}
 		}
 	}
 
-	term.clear_previous_line()
+	if !args.verbose {
+		term.clear_previous_line()
+	}
 	println('')
 
 	has_patch_installed := installed_patches.filter(it.starts_with('patch:')).len != 0
@@ -193,7 +223,14 @@ fn main() {
 		config_path := os.join_path(patch.path, 'config.toml')
 		config_exists := os.exists(config_path)
 
+		if args.verbose {
+			println('Checking for config at ${config_path}')
+		}
+
 		if !config_exists {
+			if args.verbose {
+				println("The config.toml file doesn't exist, skipping.")
+			}
 			continue
 		}
 
@@ -219,7 +256,10 @@ fn main() {
 
 		patch.use_mkxp = patch.cfg.value('runtime.use_mkxp').default_to(false).bool()
 
-		patch.valid = (patch.original_allowed && game_title == 'Changed') || (patch.special_allowed && game_title == 'Changed-special') || (patch.unofficial_allowed && game_title != "Changed" && game_title != "Changed-special")
+		patch.valid = (patch.original_allowed && game_title == 'Changed')
+			|| (patch.special_allowed && game_title == 'Changed-special')
+			|| (patch.unofficial_allowed && game_title != 'Changed'
+			&& game_title != 'Changed-special')
 		patch.already_installed = installed_patches.contains('${patch.patch_type}:${patch.id}')
 
 		if patch.already_installed {
@@ -242,17 +282,19 @@ fn main() {
 	}
 
 	println('')
-	
+
 	chosen_idx := os.input('Pick a patch (1...${patches.len}): ').i32()
-	
+
 	if chosen_idx < 1 || chosen_idx > patches.len {
-		println('That\'s not a valid number!')
+		println('Exiting')
 		exit(0)
 	}
 
 	// Validate the patch first
 
-	term.clear_previous_line()
+	if !args.verbose {
+		term.clear_previous_line()
+	}
 
 	chosen_patch := patches[chosen_idx - 1]
 	if !chosen_patch.valid {
@@ -271,7 +313,7 @@ fn main() {
 	}
 
 	if has_patch_installed && chosen_patch.patch_type == 'patch' {
-		eprintln('You can\'t patch the game twice!')
+		eprintln("You can't patch the game twice!")
 		exit(0)
 	}
 
@@ -284,7 +326,11 @@ fn main() {
 	bkp_exists := os.exists(bkp_path)
 
 	if !bkp_exists {
-		os.cp(archive_path, bkp_path) or { 
+		if args.verbose {
+			println("Backing up the game archive because a backup doesn't already exist...")
+		}
+
+		os.cp(archive_path, bkp_path) or {
 			eprintln('Failed to back up the game archive: ${term.bg_red(err.str())}')
 		}
 	}
@@ -292,32 +338,29 @@ fn main() {
 	scripts_path := os.join_path(chosen_patch.path, 'Scripts')
 	patch_has_custom_scripts := os.exists(scripts_path)
 
+	if args.verbose {
+		println('Checking for custom scripts...')
+	}
+
 	if patch_has_custom_scripts || args.force_scripts {
-		scripts_entry := archive.get_entry('Data/Scripts.rvdata') or { 
-			eprintln('The archive file has no ${term.bg_red(" Data/Scripts.rvdata ")} file!')
+		if args.verbose {
+			println('Patch has scripts! Inserting/replacing...')
+		}
+
+		scripts_entry := archive.get_entry('Data/Scripts.rvdata') or {
+			eprintln('The archive file has no ${term.bg_red(' Data/Scripts.rvdata ')} file!')
 			exit(1)
 		}
 
 		scripts_data := archive.read_entry(scripts_entry)
-		os.write_file_array('./temp_scripts.rvdata', scripts_data) or { 
-			eprintln('Failed to write to the temporary Scripts.rvdata file!')
-			exit(1)
-		}
-
-		state.scripts = parse_scripts() or {
+		state.scripts = parse_scripts(scripts_data) or {
 			eprintln('Failed to parse Scripts.rvdata! ${term.bg_red(err.str())}')
 			exit(1)
 		}
 
-		if !args.keep_temp {
-			os.rm('./temp_scripts.rvdata') or { }
-		}
-
 		os.walk(scripts_path, fn [mut state, chosen_patch] (p string) {
 			file_name := os.file_name(p).all_before_last(os.file_ext(p))
-			file_contents := os.read_file(p) or { 
-				return
-			}
+			file_contents := os.read_file(p) or { return }
 
 			if chosen_patch.patch_type == 'patch' {
 				state.scripts.add_or_replace(file_name, file_contents)
@@ -332,25 +375,45 @@ fn main() {
 		})
 	}
 
+	if args.verbose {
+		println('Preparing archive...')
+	}
+
 	archive.prepare()
+
+	if args.verbose {
+		println('Done preparing archive.')
+	}
 
 	mut new_archive := vrgss.RGSS2A{}
 
 	assets_path := os.join_path(chosen_patch.path, 'PatchedAssets')
 
-	os.walk(assets_path, fn [mut state, assets_path, chosen_patch, mut archive] (p string) {
+	if args.verbose {
+		println('Checking for patched assets...')
+	}
+
+	os.walk(assets_path, fn [args, mut state, assets_path, chosen_patch, mut archive] (p string) {
 		less_path := p.all_after_first(assets_path + os.path_separator)
-		file_bytes := os.read_bytes(p) or { 
+		file_bytes := os.read_bytes(p) or {
 			eprintln('Failed to read file ${p}: ${term.bg_red(err.str())}')
 			exit(1)
 		}
-		
-		if chosen_patch.patch_type == "patch" {
+
+		if chosen_patch.patch_type == 'patch' {
+			if args.verbose {
+				println('Directly patching ${vrgss.fix_name(less_path)}')
+			}
+
 			state.patched[vrgss.fix_name(less_path)] = file_bytes
-		} else if chosen_patch.patch_type == "library" {
+		} else if chosen_patch.patch_type == 'library' {
 			if archive.has_entry(vrgss.fix_name(less_path)) {
 				println('Skipping file ${less_path} in library because it\'s a builtin asset.')
 			} else {
+				if args.verbose {
+					println('Directly patching ${vrgss.fix_name(less_path)}')
+				}
+
 				state.patched[vrgss.fix_name(less_path)] = file_bytes
 			}
 		}
@@ -359,20 +422,19 @@ fn main() {
 	new_str := (patchlist_content + '\n${chosen_patch.patch_type}:${chosen_patch.id}').trim_space().bytes()
 
 	if !args.dont_save_patchlist {
+		if args.verbose {
+			println('Setting Data/patchlist.txt to: ${new_str}')
+		}
+
 		state.patched['Data/patchlist.txt'] = new_str
 	}
 
 	if patch_has_custom_scripts || args.force_scripts {
-		marshaled_scripts(state.scripts)
-
-		state.patched[vrgss.fix_name('Data/Scripts.rvdata')] = os.read_bytes('./temp_scripts_new.rvdata') or { 
-			eprintln('Failed to read file temp_scripts_new.rvdata: ${term.bg_red(err.str())}')
-			exit(1)
+		if args.verbose {
+			println('Marshaling scripts...')
 		}
 
-		if !args.keep_temp {
-			os.rm('./temp_scripts_new.rvdata') or { }
-		}
+		state.patched[vrgss.fix_name('Data/Scripts.rvdata')] = marshaled_scripts(state.scripts)
 	}
 
 	// First pass
@@ -409,32 +471,39 @@ fn main() {
 	if chosen_patch.use_mkxp {
 		has_mkxp_already := os.exists('./mkxp.json')
 		has_mkxp_zip := os.exists('./mkxp.zip')
-		
+
 		if !has_mkxp_already {
-			term.clear_previous_line()
+			if !args.verbose {
+				term.clear_previous_line()
+			}
 			println(term.bg_cyan(term.bright_white(' INFO: This patch recommends (or requires) the MKXP-Z runtime. Do you want to download it? ')))
 			println(term.bg_cyan(term.bright_white(' INFO: (this will install both the Linux version and the Windows version) ')))
 			println('')
 
-			install := os.input('[y/n] (default y): ').trim_space() != "n"
+			install := os.input('[y/n] (default y): ').trim_space().to_lower() != 'n'
 
 			if install {
 				if !has_mkxp_zip {
-					resp := http.fetch(url: 'https://github.com/zUltimaPG3D/ChangedPatcher/releases/download/lib-mkxp/mkxp.zip', method: .get) or {
+					resp := http.fetch(
+						url:    'https://github.com/zUltimaPG3D/ChangedPatcher/releases/download/lib-mkxp/mkxp.zip'
+						method: .get
+					) or {
 						eprintln('Failed to download mkxp.zip: ${term.bg_red(err.str())}')
 						exit(1)
 					}
-					os.write_file_array('./mkxp.zip', resp.body.bytes()) or { 
+					os.write_file_array('./mkxp.zip', resp.body.bytes()) or {
 						eprintln('Failed to save mkxp.zip: ${term.bg_red(err.str())}')
 						exit(1)
 					}
 				}
 
-				szip.extract_zip_to_dir('./mkxp.zip', args.working_directory) or {
-					spaced1 := term.highlight_command('./mkxp.zip')
-					spaced2 := term.highlight_command('args.working_directory')
+				if !args.dry_run {
+					szip.extract_zip_to_dir('./mkxp.zip', args.working_directory) or {
+						spaced1 := term.highlight_command('./mkxp.zip')
+						spaced2 := term.highlight_command('args.working_directory')
 
-					eprintln('Failed to extract ${spaced1} to ${spaced2}: ${term.bg_red(err.str())}')
+						eprintln('Failed to extract ${spaced1} to ${spaced2}: ${term.bg_red(err.str())}')
+					}
 				}
 			}
 
@@ -442,5 +511,5 @@ fn main() {
 		}
 	}
 
-	ruby.cleanup()
+	vruby.cleanup()
 }
